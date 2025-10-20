@@ -1,9 +1,6 @@
-use crate::bdos::Bdos;
-use crate::mmu::Mmu;
-use crate::ports::Ports;
+use crate::{Mmu, Ports};
 
-const BDOS_CALL_ADDR: u16 = 0x0005;
-
+/// Lookup table for opcode cycles (action-not-taken value for conditional instructions)
 const OPCODE_CYCLES: [u8; 256] = [
     04, 10, 07, 05, 05, 05, 07, 04, 04, 10, 07, 05, 05, 05, 07, 04, // 00..0F
     04, 10, 07, 05, 05, 05, 07, 04, 04, 10, 07, 05, 05, 05, 07, 04, // 00..1F
@@ -22,6 +19,25 @@ const OPCODE_CYCLES: [u8; 256] = [
     05, 10, 10, 18, 11, 11, 07, 11, 05, 05, 10, 05, 11, 17, 07, 11, // E0..EF
     05, 10, 10, 04, 11, 11, 07, 11, 05, 05, 10, 04, 11, 17, 07, 11, // F0..FF
 ];
+
+/// Returns the number of cycles for the given opcode.
+fn get_opcode_cycles(opcode: u8, action_taken: bool) -> u8 {
+    let base_cycles = OPCODE_CYCLES[opcode as usize];
+    if action_taken {
+        match opcode {
+            0xC0 | 0xD0 | 0xE0 | 0xF0 | 0xC8 | 0xD8 | 0xE8 | 0xF8 => 11,
+            0xC4 | 0xD4 | 0xE4 | 0xF4 | 0xCC | 0xDC | 0xEC | 0xFC => 17,
+            _ => base_cycles,
+        }
+    } else {
+        base_cycles
+    }
+}
+
+/// Auxiliary function that takes 2 bytes and returns a word
+fn merge_bytes(low: u8, high: u8) -> u16 {
+    ((high as u16) << 8) | (low as u16)
+}
 
 /// Represents the Intel 8080 CPU flags.
 #[derive(Default)]
@@ -81,14 +97,16 @@ pub struct Cpu {
     pub sp: u16,
     pub pc: u16,
 
-    // Flags (Intel 8080: Sign, Zero, Aux Carry, Parity, Carry)
+    // Intel 8080 Flags (Sign, Zero, Aux Carry, Parity, Carry)
     pub flags: Flags,
-    pub ime: bool, // Interrupt Master Enable
 
-    /// Total cycles executed by the CPU
+    // Interrupt Master Enable
+    pub ime: bool,
+
+    // Total cycles executed by the CPU
     pub cycles: u64,
 
-    /// Halted state
+    // Halted state
     pub halted: bool,
 }
 
@@ -129,11 +147,6 @@ impl Cpu {
             return 4;
         }
 
-        // Handle CP/M BDOS call at address 0x0005
-        if self.pc == BDOS_CALL_ADDR {
-            Bdos::handle_call(self.c, self.get_de(), mmu);
-        }
-
         let opcode = self.fetch_byte(mmu);
         let cycles = self.execute_opcode(opcode, mmu, ports) as u64;
         self.cycles = self.cycles.wrapping_add(cycles);
@@ -155,7 +168,7 @@ impl Cpu {
 
     /// Executes an opcode and returns the number of cycles consumed.
     fn execute_opcode(&mut self, opcode: u8, mmu: &mut Mmu, ports: &mut Ports) -> u8 {
-        let cycles = self.get_opcode_cycles(opcode);
+        let mut action_taken = false;
 
         match opcode {
             // # Misc/control instructions
@@ -179,48 +192,57 @@ impl Cpu {
                 // RNZ
                 if !self.flags.z {
                     self.ret(mmu);
+                    action_taken = true;
                 }
             }
             0xD0 => {
                 // RNC
                 if !self.flags.cy {
                     self.ret(mmu);
+                    action_taken = true;
                 }
             }
             0xE0 => {
                 // RPO
                 if !self.flags.p {
                     self.ret(mmu);
-                }
-            }
-            0xE8 => {
-                // RPE
-                if self.flags.p {
-                    self.ret(mmu);
+                    action_taken = true;
                 }
             }
             0xF0 => {
                 // RP
                 if !self.flags.s {
                     self.ret(mmu);
+                    action_taken = true;
                 }
             }
+
             0xC8 => {
                 // RZ
                 if self.flags.z {
                     self.ret(mmu);
+                    action_taken = true;
                 }
             }
             0xD8 => {
                 // RC
                 if self.flags.cy {
                     self.ret(mmu);
+                    action_taken = true;
+                }
+            }
+            0xE8 => {
+                // RPE
+                if self.flags.p {
+                    self.ret(mmu);
+                    action_taken = true;
                 }
             }
             0xF8 => {
                 // RM
                 if self.flags.s {
                     self.ret(mmu);
+                    action_taken = true;
                 }
             }
 
@@ -265,6 +287,7 @@ impl Cpu {
                 if self.flags.z {
                     self.push(self.pc, mmu);
                     self.pc = addr;
+                    action_taken = true;
                 }
             }
             0xDC => {
@@ -273,6 +296,7 @@ impl Cpu {
                 if self.flags.cy {
                     self.push(self.pc, mmu);
                     self.pc = addr;
+                    action_taken = true;
                 }
             }
 
@@ -304,6 +328,7 @@ impl Cpu {
                 if !self.flags.z {
                     self.push(self.pc, mmu);
                     self.pc = addr;
+                    action_taken = true;
                 }
             }
             0xD4 => {
@@ -312,6 +337,7 @@ impl Cpu {
                 if !self.flags.cy {
                     self.push(self.pc, mmu);
                     self.pc = addr;
+                    action_taken = true;
                 }
             }
 
@@ -321,6 +347,7 @@ impl Cpu {
                 if !self.flags.p {
                     self.push(self.pc, mmu);
                     self.pc = addr;
+                    action_taken = true;
                 }
             }
             0xEC => {
@@ -329,6 +356,7 @@ impl Cpu {
                 if self.flags.p {
                     self.push(self.pc, mmu);
                     self.pc = addr;
+                    action_taken = true;
                 }
             }
             0xF4 => {
@@ -337,6 +365,7 @@ impl Cpu {
                 if !self.flags.s {
                     self.push(self.pc, mmu);
                     self.pc = addr;
+                    action_taken = true;
                 }
             }
             0xFA => {
@@ -352,6 +381,7 @@ impl Cpu {
                 if self.flags.s {
                     self.push(self.pc, mmu);
                     self.pc = addr;
+                    action_taken = true;
                 }
             }
 
@@ -803,7 +833,7 @@ impl Cpu {
             }
         };
 
-        cycles
+        get_opcode_cycles(opcode, action_taken)
     }
 
     /// Triggers an interrupt if interrupts are enabled.
@@ -815,10 +845,6 @@ impl Cpu {
         self.ime = false;
         self.halted = false;
         self.rst(vector, mmu);
-    }
-
-    fn get_opcode_cycles(&self, opcode: u8) -> u8 {
-        OPCODE_CYCLES[opcode as usize]
     }
 
     /// Halt the CPU.
@@ -874,6 +900,7 @@ impl Cpu {
         result
     }
 
+    /// Decimal Adjust Accumulator.
     fn daa(&mut self) -> u8 {
         let mut correction = 0;
         if (self.a & 0x0F) > 9 || self.flags.ac {
@@ -1084,9 +1111,4 @@ impl Cpu {
         let addr = self.get_hl();
         mmu.write_byte(addr, value);
     }
-}
-
-/// Auxiliary function that takes 2 bytes and returns a word
-fn merge_bytes(low: u8, high: u8) -> u16 {
-    ((high as u16) << 8) | (low as u16)
 }

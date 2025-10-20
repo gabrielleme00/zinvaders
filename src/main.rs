@@ -1,6 +1,6 @@
 use minifb::{Key, Window, WindowOptions};
 use std::{env, fs};
-use zinvaders::{Input, SoundSystem, State};
+use zinvaders::{Input, SoundSystem, State, Bdos};
 
 const DISPLAY_WIDTH: usize = 224;
 const DISPLAY_HEIGHT: usize = 256;
@@ -14,6 +14,8 @@ const CPU_FREQUENCY_HZ: u32 = 2_000_000; // 2 MHz
 const REFRESH_RATE_HZ: u32 = 60; // 60 Hz
 const FRAME_CYCLES: u32 = CPU_FREQUENCY_HZ / REFRESH_RATE_HZ; // 33333 cycles/frame @ 60Hz 
 const HALF_FRAME_CYCLES: u32 = FRAME_CYCLES / 2; // 16666 cycles/frame @ 60Hz
+
+const BDOS_CALL_ADDR: u16 = 0x0005;
 
 fn main() {
     let rom_path = env::args().nth(1).expect("Usage: zinvaders <rom_path>");
@@ -34,6 +36,11 @@ fn main() {
         loop {
             state.cpu.print_state(&state.mmu);
             state.cpu.step(&mut state.mmu, &mut state.ports);
+
+            // Handle CP/M BDOS call at address 0x0005
+            if state.cpu.pc == BDOS_CALL_ADDR {
+                Bdos::handle_call(state.cpu.c, state.cpu.get_de(), &mut state.mmu);
+            }
 
             if state.cpu.halted {
                 println!("CPU halted");
