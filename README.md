@@ -54,4 +54,10 @@ If you have 4 separate files for the ROM, you must merge them in the correct ord
 cat invaders.h invaders.g invaders.f invaders.e > invaders.rom
 ```
 
+Or by using the `merge_roms.py` script, like so:
+
+```bash
+python3 merge_roms.py ./space_invaders_roms space_invaders space_invaders.rom
+```
+
 **Note**: Space Invaders ROM files are copyrighted and cannot be legally distributed with this emulator. You must obtain them from legal sources.
